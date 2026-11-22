@@ -204,7 +204,7 @@ st.divider()
 # ----------------------------------------------------------------------
 # TABS: 1. DEALER GEX PROFILE | 2. THETA EROSION & EXPIRY SIMULATOR
 # ----------------------------------------------------------------------
-tab1, tab2 = st.tabs(["Dealer Gamma Exposure (GEX)", "⏳ Theta Erosion & Expiry Simulator"])
+tab1, tab2 = st.tabs(["Dealer Gamma Exposure (GEX)", "Theta Erosion & Expiry Simulator"])
 
 # ======================================================================
 # TAB 1: DEALER GEX PROFILE
