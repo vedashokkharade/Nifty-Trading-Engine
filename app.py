@@ -121,7 +121,7 @@ def generate_demo_chain(spot, T, r=RISK_FREE_RATE):
 # ----------------------------------------------------------------------
 # SIDEBAR CONTROLS
 # ----------------------------------------------------------------------
-st.sidebar.header("⚙️ Engine Controls")
+st.sidebar.header("Engine Controls")
 uploaded_file = st.sidebar.file_uploader("Upload NSE Option Chain CSV (Optional)", type=["csv"])
 auto_refresh = st.sidebar.toggle("Live Market Auto-Refresh (30s)", value=False)
 strike_window = st.sidebar.slider("Strike Window (± Points from Spot)", 500, 2000, 1000, step=100)
@@ -189,7 +189,7 @@ gamma_flip = sorted_chain.loc[sign_changes[0], "STRIKE"] if len(sign_changes) > 
 # ----------------------------------------------------------------------
 # HEADER & TOP KPIS
 # ----------------------------------------------------------------------
-st.title("📈 NIFTY 50 Quant, Gamma Exposure & Erosion Engine")
+st.title("NIFTY 50 Quant, Gamma Exposure & Erosion Engine")
 st.caption(f"Active Expiry: **{expiry_date.strftime('%d %b %Y')}** ({days_to_expiry} DTE) | Last Updated: {now.strftime('%H:%M:%S IST')}")
 
 c1, c2, c3, c4, c5 = st.columns(5)
@@ -204,7 +204,7 @@ st.divider()
 # ----------------------------------------------------------------------
 # TABS: 1. DEALER GEX PROFILE | 2. THETA EROSION & EXPIRY SIMULATOR
 # ----------------------------------------------------------------------
-tab1, tab2 = st.tabs(["📊 Dealer Gamma Exposure (GEX)", "⏳ Theta Erosion & Expiry Simulator"])
+tab1, tab2 = st.tabs(["Dealer Gamma Exposure (GEX)", "⏳ Theta Erosion & Expiry Simulator"])
 
 # ======================================================================
 # TAB 1: DEALER GEX PROFILE
@@ -245,12 +245,12 @@ with tab1:
     plt.tight_layout()
     st.pyplot(fig)
 
-    st.subheader("📋 Strike-by-Strike Greeks & Dealer Exposure Table")
+    st.subheader("Strike-by-Strike Greeks & Dealer Exposure Table")
     display_cols = ["STRIKE", "CALL_OI", "PUT_OI", "CALL_IV", "PUT_IV", "CALL_DELTA", "PUT_DELTA", "GAMMA", "CALL_GEX_CR", "PUT_GEX_CR", "NET_GEX_CR", "DEX_CR"]
     st.dataframe(window[display_cols].style.format("{:.2f}", subset=["CALL_IV", "PUT_IV", "CALL_DELTA", "PUT_DELTA", "CALL_GEX_CR", "PUT_GEX_CR", "NET_GEX_CR", "DEX_CR"]), use_container_width=True)
 
     csv_data = chain.to_csv(index=False).encode("utf-8")
-    st.download_button("⬇️ Download EOD Settled Chain (CSV)", data=csv_data, file_name=f"nifty_eod_chain_{now.strftime('%Y-%m-%d')}.csv", mime="text/csv")
+    st.download_button("Download EOD Settled Chain (CSV)", data=csv_data, file_name=f"nifty_eod_chain_{now.strftime('%Y-%m-%d')}.csv", mime="text/csv")
 
 # ======================================================================
 # TAB 2: THETA EROSION & EXPIRY SIMULATOR
@@ -383,7 +383,7 @@ with tab2:
         st.markdown("#### Intraday Time Decay Schedule")
         st.dataframe(decay_df, use_container_width=True, hide_index=True)
     with t_col2:
-        st.markdown("#### 🎯 Expiry Spot & Delta/Gamma Simulation Grid")
+        st.markdown("#### Expiry Spot & Delta/Gamma Simulation Grid")
         st.dataframe(sim_df, use_container_width=True, hide_index=True)
 
 if auto_refresh:
