@@ -5,6 +5,7 @@ import yfinance as yf
 import matplotlib.pyplot as plt
 from scipy.stats import norm
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 # ----------------------------------------------------------------------
 # PAGE CONFIGURATION
@@ -17,8 +18,9 @@ st.set_page_config(
 )
 
 # ----------------------------------------------------------------------
-# CONSTANTS & NSE HOLIDAY SCHEDULE
+# CONSTANTS, TIMEZONE & NSE HOLIDAY SCHEDULE
 # ----------------------------------------------------------------------
+IST = ZoneInfo("Asia/Kolkata")
 RISK_FREE_RATE = 0.065
 NIFTY_LOT_SIZE = 65
 
@@ -38,7 +40,7 @@ def get_nifty_expiry(current_dt: datetime):
     else:
         candidate_expiry = this_tuesday
 
-    cutoff_dt = datetime(candidate_expiry.year, candidate_expiry.month, candidate_expiry.day, 15, 30, 0)
+    cutoff_dt = datetime(candidate_expiry.year, candidate_expiry.month, candidate_expiry.day, 15, 30, 0, tzinfo=IST)
     if current_dt > cutoff_dt:
         next_tuesday = this_tuesday + timedelta(days=7)
         candidate_expiry = next_tuesday - timedelta(days=1) if next_tuesday.strftime("%Y-%m-%d") in NSE_HOLIDAYS else next_tuesday
@@ -143,12 +145,12 @@ spot = st.sidebar.number_input("Spot Price Override (₹)", value=float(round(li
 r_rate = st.sidebar.number_input("Risk-Free Rate (%)", value=6.5, step=0.1) / 100.0
 
 # ----------------------------------------------------------------------
-# GLOBAL DATA PROCESSING
+# GLOBAL DATA PROCESSING (IST TIMEZONE-AWARE)
 # ----------------------------------------------------------------------
-now = datetime.now()
+now = datetime.now(IST)
 expiry_date = get_nifty_expiry(now)
 days_to_expiry = max((expiry_date - now.date()).days, 0)
-expiry_dt = datetime(expiry_date.year, expiry_date.month, expiry_date.day, 15, 30, 0)
+expiry_dt = datetime(expiry_date.year, expiry_date.month, expiry_date.day, 15, 30, 0, tzinfo=IST)
 seconds_to_expiry = max((expiry_dt - now).total_seconds(), 3600.0)
 T = seconds_to_expiry / (365.25 * 86400.0)
 
@@ -204,320 +206,4 @@ gamma_flip = sorted_chain.loc[sign_changes[0], "STRIKE"] if len(sign_changes) > 
 st.title("NIFTY 50 Quant, Gamma Exposure & Erosion Engine")
 st.caption(f"Active Expiry: **{expiry_date.strftime('%d %b %Y')}** ({days_to_expiry} DTE) | Last Updated: {now.strftime('%H:%M:%S IST')}")
 
-c1, c2, c3, c4, c5 = st.columns(5)
-c1.metric("NIFTY Spot", f"₹{spot:,.2f}", f"ATM: {atm_strike:.0f}")
-c2.metric("Net Dealer GEX", f"₹{gex_total:,.2f} Cr", "Long Gamma" if gex_total > 0 else "Short Gamma")
-c3.metric("Dealer Delta (DEX)", f"₹{dex_total:,.2f} Cr", f"PCR: {pcr:.2f}")
-c4.metric("Expected Move", f"±{expected_move:.1f} pts", f"ATM IV: {atm_iv:.2f}%")
-c5.metric("Call / Put Walls", f"{call_wall:.0f} / {put_wall:.0f}", f"Flip: {gamma_flip:.0f}" if pd.notna(gamma_flip) else "Flip: N/A")
-
-st.divider()
-
-# ----------------------------------------------------------------------
-# TABS: 1. DEALER GEX | 2. THETA EROSION | 3. THETA VS IV-CRUSH CROSSOVER
-# ----------------------------------------------------------------------
-tab1, tab2, tab3 = st.tabs([
-    "Dealer Gamma Exposure (GEX)",
-    "Theta Erosion & Expiry Simulator",
-    "Theta vs. IV-Crush Crossover"
-])
-
-strike_list = sorted(chain["STRIKE"].unique().tolist())
-default_strike_idx = strike_list.index(atm_strike) if atm_strike in strike_list else len(strike_list) // 2
-
-# ======================================================================
-# TAB 1: DEALER GEX PROFILE
-# ======================================================================
-with tab1:
-    window = chain[(chain["STRIKE"] >= spot - strike_window) & (chain["STRIKE"] <= spot + strike_window)].copy()
-
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 8), sharex=True, gridspec_kw={'height_ratios': [2, 1.2]})
-    plt.style.use("dark_background")
-    fig.patch.set_facecolor("#0e1117")
-    ax1.set_facecolor("#0e1117")
-    ax2.set_facecolor("#0e1117")
-
-    width = 22
-    ax1.bar(window["STRIKE"] - width/2, window["CALL_GEX_CR"], width=width, color="#00E676", alpha=0.85, label="Call Gamma (Dealer Long)")
-    ax1.bar(window["STRIKE"] + width/2, window["PUT_GEX_CR"], width=width, color="#FF5252", alpha=0.85, label="Put Gamma (Dealer Short)")
-    ax1.axvline(spot, color="#40C4FF", linestyle="--", linewidth=1.8, label=f"Spot: {spot:.1f}")
-    ax1.axvline(call_wall, color="#1DE9B6", linestyle=":", linewidth=1.8, label=f"Call Wall: {call_wall:.0f}")
-    ax1.axvline(put_wall, color="#FF4081", linestyle=":", linewidth=1.8, label=f"Put Wall: {put_wall:.0f}")
-    ax1.set_title("Dealer Gamma Exposure by Strike (₹ Crores per 1% Move)", fontsize=12, fontweight="bold", color="white")
-    ax1.set_ylabel("GEX (₹ Cr)", color="lightgray")
-    ax1.grid(True, linestyle="--", alpha=0.2)
-    ax1.legend(loc="upper left", framealpha=0.3)
-
-    ax2.plot(window["STRIKE"], window["NET_GEX_CR"], color="#82B1FF", linewidth=2.2, marker="o", markersize=4, label="Net Dealer Gamma")
-    ax2.fill_between(window["STRIKE"], window["NET_GEX_CR"], 0, where=(window["NET_GEX_CR"] >= 0), color="#00E676", alpha=0.2, interpolate=True)
-    ax2.fill_between(window["STRIKE"], window["NET_GEX_CR"], 0, where=(window["NET_GEX_CR"] < 0), color="#FF5252", alpha=0.2, interpolate=True)
-    ax2.axhline(0, color="gray", linestyle="-", linewidth=1.0)
-    ax2.axvline(spot, color="#40C4FF", linestyle="--", linewidth=1.5)
-    if pd.notna(gamma_flip):
-        ax2.axvline(gamma_flip, color="#FFAB40", linestyle="-.", linewidth=1.8, label=f"Gamma Flip: {gamma_flip:.0f}")
-
-    ax2.set_xlabel("Strike Price", fontsize=11, color="lightgray")
-    ax2.set_ylabel("Net GEX (₹ Cr)", color="lightgray")
-    ax2.grid(True, linestyle="--", alpha=0.2)
-    ax2.legend(loc="upper left", framealpha=0.3)
-
-    plt.tight_layout()
-    st.pyplot(fig)
-
-    st.subheader("Strike-by-Strike Greeks & Dealer Exposure Table")
-    display_cols = ["STRIKE", "CALL_OI", "PUT_OI", "CALL_IV", "PUT_IV", "CALL_DELTA", "PUT_DELTA", "GAMMA", "CALL_GEX_CR", "PUT_GEX_CR", "NET_GEX_CR", "DEX_CR"]
-    st.dataframe(window[display_cols].style.format("{:.2f}", subset=["CALL_IV", "PUT_IV", "CALL_DELTA", "PUT_DELTA", "CALL_GEX_CR", "PUT_GEX_CR", "NET_GEX_CR", "DEX_CR"]), use_container_width=True)
-
-    csv_data = chain.to_csv(index=False).encode("utf-8")
-    st.download_button("Download EOD Settled Chain (CSV)", data=csv_data, file_name=f"nifty_eod_chain_{now.strftime('%Y-%m-%d')}.csv", mime="text/csv")
-
-# ======================================================================
-# TAB 2: THETA EROSION & EXPIRY SIMULATOR
-# ======================================================================
-with tab2:
-    st.subheader("Intraday Premium Erosion & Expiry Payoff Simulator")
-    st.caption("Auto-populated from your live NIFTY option chain. Select any strike or override parameters below to stress-test Theta decay.")
-
-    col_p1, col_p2, col_p3, col_p4, col_p5 = st.columns(5)
-
-    with col_p1:
-        selected_strike = st.selectbox("Select Strike (K)", strike_list, index=default_strike_idx, key="t2_strike")
-    with col_p2:
-        opt_type = st.selectbox("Option Type", ["CE", "PE"], index=0, key="t2_opt")
-
-    row_sel = chain[chain["STRIKE"] == selected_strike].iloc[0]
-    default_prem = float(row_sel["CALL_LTP"] if opt_type == "CE" else row_sel["PUT_LTP"])
-    default_iv = float(row_sel["CALL_IV"] if opt_type == "CE" else row_sel["PUT_IV"])
-    if default_iv <= 0:
-        default_iv = atm_iv
-    if default_prem <= 0:
-        default_prem = max(bsm_full_metrics(spot, selected_strike, max(T, 1/365), default_iv / 100.0, opt_type, r_rate)[0], 5.0)
-
-    with col_p3:
-        sim_premium = st.number_input("Entry Premium (₹)", value=round(default_prem, 2), step=1.0, min_value=0.05)
-    with col_p4:
-        sim_iv = st.number_input("Implied Volatility (%)", value=round(default_iv, 2), step=0.25, min_value=1.0)
-    with col_p5:
-        sim_dte = st.number_input("Days to Expiry (DTE)", value=max(float(days_to_expiry), 1.0), step=0.5, min_value=0.1)
-
-    sim_T = sim_dte / 365.0
-    sim_vol = sim_iv / 100.0
-    bs_fair, sim_delta, sim_gamma, sim_vega, true_daily_theta = bsm_full_metrics(spot, selected_strike, sim_T, sim_vol, opt_type, r_rate)
-
-    intrinsic_now = max(spot - selected_strike, 0.0) if opt_type == "CE" else max(selected_strike - spot, 0.0)
-    extrinsic_now = max(sim_premium - intrinsic_now, 0.0)
-    move_to_beat_theta = true_daily_theta / max(abs(sim_delta), 1e-4)
-    breakeven_spot = (selected_strike + sim_premium) if opt_type == "CE" else (selected_strike - sim_premium)
-
-    ek1, ek2, ek3, ek4, ek5 = st.columns(5)
-    ek1.metric("Extrinsic (Time) Value", f"₹{extrinsic_now:.2f}", f"Intrinsic: ₹{intrinsic_now:.2f}")
-    ek2.metric("True Daily Theta", f"-₹{true_daily_theta:.2f} / day", f"BSM Fair: ₹{bs_fair:.2f}")
-    ek3.metric("Delta / Gamma", f"{sim_delta:.3f}", f"Γ: {sim_gamma:.5f}")
-    ek4.metric("Move to Beat 1D Theta", f"{move_to_beat_theta:.1f} pts", "Spot move needed")
-    ek5.metric("Expiry Breakeven", f"{breakeven_spot:,.2f}", f"{breakeven_spot - spot:+.1f} pts from spot")
-
-    decay_fractions = np.round(np.arange(0.0, 1.0, 0.1), 1)
-    decay_rows = []
-    for frac in decay_fractions:
-        rem_T = sim_T * (1.0 - frac)
-        bs_val_t = bsm_full_metrics(spot, selected_strike, rem_T, sim_vol, opt_type, r_rate)[0]
-        linear_prem = max(sim_premium - (true_daily_theta * frac * sim_dte), intrinsic_now)
-        decay_rows.append({
-            "Time Elapsed (%)": f"{int(frac*100)}%",
-            "Remaining DTE": round(sim_dte * (1.0 - frac), 2),
-            "Linear Erosion Prem (₹)": round(linear_prem, 2),
-            "True BSM Prem (₹)": round(bs_val_t, 2),
-            "Extrinsic Lost (₹)": round(sim_premium - bs_val_t, 2)
-        })
-    decay_df = pd.DataFrame(decay_rows)
-
-    sim_spots = np.arange(round(spot / 20) * 20 - 200, round(spot / 20) * 20 + 220, 20)
-    sim_rows = []
-    for s_exp in sim_spots:
-        intrinsic_exp = max(s_exp - selected_strike, 0.0) if opt_type == "CE" else max(selected_strike - s_exp, 0.0)
-        u_move = s_exp - spot
-        delta_move = sim_delta * u_move
-        dg_move = (sim_delta * u_move) + (0.5 * sim_gamma * (u_move**2))
-        net_pnl = intrinsic_exp - sim_premium
-
-        sim_rows.append({
-            "Expiry Spot": s_exp,
-            "Intrinsic at Expiry (₹)": round(intrinsic_exp, 2),
-            "Net Expiry PnL (₹)": round(net_pnl, 2),
-            "Underlying Move (pts)": round(u_move, 2),
-            "Option Move (Delta)": round(delta_move, 2),
-            "Option Move (Delta+Gamma)": round(dg_move, 2),
-            "Move to Beat Theta": round(move_to_beat_theta, 2)
-        })
-    sim_df = pd.DataFrame(sim_rows)
-
-    fig_e, (eax1, eax2) = plt.subplots(1, 2, figsize=(15, 5.2))
-    plt.style.use("dark_background")
-    fig_e.patch.set_facecolor("#0e1117")
-    eax1.set_facecolor("#0e1117")
-    eax2.set_facecolor("#0e1117")
-
-    x_ticks = np.arange(len(decay_df))
-    eax1.plot(x_ticks, decay_df["Linear Erosion Prem (₹)"], linestyle="--", color="#FFAB40", marker="o", label="Linear Theta Decay")
-    eax1.plot(x_ticks, decay_df["True BSM Prem (₹)"], linewidth=2.5, color="#40C4FF", marker="s", label="True BSM Decay (√t)")
-    eax1.axhline(intrinsic_now, color="#00E676", linestyle=":", label=f"Intrinsic Floor (₹{intrinsic_now:.1f})")
-    eax1.set_xticks(x_ticks)
-    eax1.set_xticklabels(decay_df["Time Elapsed (%)"])
-    eax1.set_title(f"Time Decay Trajectory ({selected_strike:.0f} {opt_type})", fontweight="bold", color="white")
-    eax1.set_xlabel("Time Elapsed Toward Expiry", color="lightgray")
-    eax1.set_ylabel("Option Premium (₹)", color="lightgray")
-    eax1.grid(True, alpha=0.2)
-    eax1.legend(framealpha=0.3)
-
-    eax2.plot(sim_df["Expiry Spot"], sim_df["Net Expiry PnL (₹)"], linewidth=2.5, color="#82B1FF", label="Net PnL at Expiry (₹)")
-    eax2.fill_between(sim_df["Expiry Spot"], sim_df["Net Expiry PnL (₹)"], 0,
-                      where=(sim_df["Net Expiry PnL (₹)"] >= 0), color="#00E676", alpha=0.25, interpolate=True)
-    eax2.fill_between(sim_df["Expiry Spot"], sim_df["Net Expiry PnL (₹)"], 0,
-                      where=(sim_df["Net Expiry PnL (₹)"] < 0), color="#FF5252", alpha=0.25, interpolate=True)
-    eax2.axhline(0, color="gray", linewidth=1)
-    eax2.axvline(spot, color="#40C4FF", linestyle="--", label=f"Current Spot ({spot:.1f})")
-    eax2.axvline(breakeven_spot, color="#FFAB40", linestyle="-.", label=f"Breakeven ({breakeven_spot:.1f})")
-    eax2.set_title("Expiry Spot Simulation & Net PnL", fontweight="bold", color="white")
-    eax2.set_xlabel("NIFTY Spot at Expiry", color="lightgray")
-    eax2.set_ylabel("Profit / Loss (₹)", color="lightgray")
-    eax2.grid(True, alpha=0.2)
-    eax2.legend(framealpha=0.3)
-
-    plt.tight_layout()
-    st.pyplot(fig_e)
-
-    t_col1, t_col2 = st.columns([1, 1.4])
-    with t_col1:
-        st.markdown("#### Intraday Time Decay Schedule")
-        st.dataframe(decay_df, use_container_width=True, hide_index=True)
-    with t_col2:
-        st.markdown("#### Expiry Spot & Delta/Gamma Simulation Grid")
-        st.dataframe(sim_df, use_container_width=True, hide_index=True)
-
-# ======================================================================
-# TAB 3: THETA VS. IV-CRUSH CROSSOVER SURFACE
-# ======================================================================
-with tab3:
-    st.subheader("Theta vs. Intraday IV-Crush Crossover Surface")
-    st.caption("Isolates the exact parity contour where quiet-day implied volatility bleed (Vega × ΔIV) overtakes √t time decay.")
-
-    cc1, cc2, cc3, cc4, cc5 = st.columns(5)
-    with cc1:
-        xo_strike = st.selectbox("Strike (K)", strike_list, index=default_strike_idx, key="t3_strike")
-    with cc2:
-        xo_opt = st.selectbox("Option Type", ["CE", "PE"], index=0, key="t3_opt")
-
-    xo_row = chain[chain["STRIKE"] == xo_strike].iloc[0]
-    xo_default_iv = float(xo_row["CALL_IV"] if xo_opt == "CE" else xo_row["PUT_IV"])
-    if xo_default_iv <= 0:
-        xo_default_iv = atm_iv
-
-    with cc3:
-        xo_iv = st.number_input("Initial IV (%)", value=round(xo_default_iv, 2), step=0.25, min_value=2.0, key="t3_iv")
-    with cc4:
-        xo_dte = st.number_input("Days to Expiry (DTE)", value=max(float(days_to_expiry), 1.0), step=0.25, min_value=0.1, key="t3_dte")
-    with cc5:
-        max_crush = st.slider("Max Intraday IV Crush (% pts)", 2.0, 12.0, 6.0, step=0.5, key="t3_crush")
-
-    xo_T0 = max(xo_dte / 365.0, 1e-6)
-    xo_sigma0 = xo_iv / 100.0
-    p0, _, _, vega0, theta0 = bsm_full_metrics(spot, xo_strike, xo_T0, xo_sigma0, xo_opt, r_rate)
-    instant_iv_hurdle = theta0 / max(vega0, 1e-6)
-
-    # KPI Row
-    xk1, xk2, xk3, xk4 = st.columns(4)
-    xk1.metric("BSM Entry Premium", f"₹{p0:.2f}", f"Spot: ₹{spot:,.2f}")
-    xk2.metric("Daily Theta (Θ)", f"-₹{theta0:.2f} / day", "Time decay rate")
-    xk3.metric("Initial Vega (ν)", f"₹{vega0:.2f} / 1% IV", "Volatility sensitivity")
-    xk4.metric("Instant Parity Ratio (Θ / ν)", f"-{instant_iv_hurdle:.2f}% IV", "IV drop = 1D Theta")
-
-    # Compute 2D Crossover Grid
-    grid_size = 80
-    time_fracs = np.linspace(0.01, 0.92, grid_size)
-    iv_drops_pct = np.linspace(0.0, min(max_crush, xo_iv * 0.85), grid_size)
-
-    T_grid, IV_drop_grid = np.meshgrid(time_fracs, iv_drops_pct)
-    rem_T_grid = xo_T0 * (1.0 - T_grid)
-    new_sigma_grid = np.maximum(xo_sigma0 - (IV_drop_grid / 100.0), 0.005)
-
-    p_time_only = bsm_vectorized_surface(spot, xo_strike, rem_T_grid, xo_sigma0, xo_opt, r_rate)
-    theta_loss_grid = p0 - p_time_only
-
-    p_combined = bsm_vectorized_surface(spot, xo_strike, rem_T_grid, new_sigma_grid, xo_opt, r_rate)
-    iv_crush_loss_grid = p_time_only - p_combined
-    total_loss_grid = p0 - p_combined
-
-    # Dominance metric: > 0 means IV crush loss > Theta loss
-    dominance_grid = iv_crush_loss_grid - theta_loss_grid
-    time_pct_axis = time_fracs * 100.0
-
-    # Dual Heatmap + Erosion Slices Chart
-    fig_xo, (xax1, xax2) = plt.subplots(1, 2, figsize=(15.5, 5.6))
-    plt.style.use("dark_background")
-    fig_xo.patch.set_facecolor("#0e1117")
-    xax1.set_facecolor("#0e1117")
-    xax2.set_facecolor("#0e1117")
-
-    X_xo, Y_xo = np.meshgrid(time_pct_axis, iv_drops_pct)
-    max_abs = max(np.max(np.abs(dominance_grid)), 1e-4)
-
-    cf = xax1.contourf(X_xo, Y_xo, dominance_grid, levels=30, cmap="RdBu_r", vmin=-max_abs, vmax=max_abs, alpha=0.88)
-    cbar = fig_xo.colorbar(cf, ax=xax1, pad=0.02)
-    cbar.set_label("IV Bleed Loss − Theta Loss (₹)", color="lightgray")
-
-    cs = xax1.contour(X_xo, Y_xo, dominance_grid, levels=[0.0], colors=["#FFEA00"], linewidths=2.8, linestyles="-")
-    xax1.clabel(cs, fmt="  CROSSOVER (IV Bleed = Theta)  ", fontsize=9.0, colors="#FFEA00")
-
-    xax1.text(20, iv_drops_pct[-1] * 0.78, "IV-CRUSH DOMINATED\n(Quiet-Day Vol Bleed > Theta)",
-              color="white", fontweight="bold", fontsize=9.0, bbox=dict(boxstyle="round,pad=0.3", facecolor="#b71c1c", alpha=0.75))
-    xax1.text(46, iv_drops_pct[-1] * 0.14, "THETA DOMINATED\n(√t Time Decay > IV Bleed)",
-              color="white", fontweight="bold", fontsize=9.0, bbox=dict(boxstyle="round,pad=0.3", facecolor="#0d47a1", alpha=0.75))
-
-    xax1.set_title(f"Theta vs. IV-Crush Dominance Surface ({xo_strike:.0f} {xo_opt})", fontweight="bold", color="white")
-    xax1.set_xlabel("Session Time Elapsed (%)", color="lightgray")
-    xax1.set_ylabel("Intraday IV Drop / Crush (% pts)", color="lightgray")
-    xax1.grid(True, linestyle="--", alpha=0.2)
-
-    slice_indices = [0, len(iv_drops_pct) // 3, (2 * len(iv_drops_pct)) // 3, -1]
-    slice_colors = ["#40C4FF", "#00E676", "#FFAB40", "#FF5252"]
-
-    for idx, col in zip(slice_indices, slice_colors):
-        iv_drop_val = iv_drops_pct[idx]
-        rem_prem = p0 - total_loss_grid[idx, :]
-        label_txt = "0.0% IV Drop (Pure Theta)" if idx == 0 else f"-{iv_drop_val:.1f}% Intraday IV Crush"
-        xax2.plot(time_pct_axis, rem_prem, linewidth=2.3, color=col, label=label_txt)
-
-    xax2.set_title("Intraday Option Premium Decay Under IV-Crush Shocks", fontweight="bold", color="white")
-    xax2.set_xlabel("Session Time Elapsed (%)", color="lightgray")
-    xax2.set_ylabel("Remaining Option Premium (₹)", color="lightgray")
-    xax2.grid(True, linestyle="--", alpha=0.2)
-    xax2.legend(framealpha=0.3)
-
-    plt.tight_layout()
-    st.pyplot(fig_xo)
-
-    # Milestone Summary Table
-    milestones = [0.10, 0.25, 0.50, 0.75, 0.90]
-    summary_rows = []
-    for frac in milestones:
-        idx = np.argmin(np.abs(time_fracs - frac))
-        cross_idx = np.argmin(np.abs(dominance_grid[:, idx]))
-        cross_iv_drop = iv_drops_pct[cross_idx]
-        th_loss = theta_loss_grid[cross_idx, idx]
-        tot_loss = total_loss_grid[cross_idx, idx]
-
-        summary_rows.append({
-            "Session Elapsed": f"{int(frac*100)}%",
-            "Pure Theta Loss (₹)": round(th_loss, 2),
-            "Crossover IV Crush (pts)": f"-{cross_iv_drop:.2f}%",
-            "Combined Bleed at Crossover (₹)": round(tot_loss, 2),
-            "Remaining Option Value (₹)": round(p0 - tot_loss, 2)
-        })
-
-    st.markdown("#### Session Milestone Crossover Schedule")
-    st.dataframe(pd.DataFrame(summary_rows), use_container_width=True, hide_index=True)
-
-if auto_refresh:
-    import time
-    time.sleep(30)
-    st.rerun()
+c1, c2, c3, c4, c5 = st.
