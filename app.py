@@ -426,4 +426,98 @@ with tab3:
 
     # KPI Row
     xk1, xk2, xk3, xk4 = st.columns(4)
-    xk1.
+    xk1.metric("BSM Entry Premium", f"₹{p0:.2f}", f"Spot: ₹{spot:,.2f}")
+    xk2.metric("Daily Theta (Θ)", f"-₹{theta0:.2f} / day", "Time decay rate")
+    xk3.metric("Initial Vega (ν)", f"₹{vega0:.2f} / 1% IV", "Volatility sensitivity")
+    xk4.metric("Instant Parity Ratio (Θ / ν)", f"-{instant_iv_hurdle:.2f}% IV", "IV drop = 1D Theta")
+
+    # Compute 2D Crossover Grid
+    grid_size = 80
+    time_fracs = np.linspace(0.01, 0.92, grid_size)
+    iv_drops_pct = np.linspace(0.0, min(max_crush, xo_iv * 0.85), grid_size)
+
+    T_grid, IV_drop_grid = np.meshgrid(time_fracs, iv_drops_pct)
+    rem_T_grid = xo_T0 * (1.0 - T_grid)
+    new_sigma_grid = np.maximum(xo_sigma0 - (IV_drop_grid / 100.0), 0.005)
+
+    p_time_only = bsm_vectorized_surface(spot, xo_strike, rem_T_grid, xo_sigma0, xo_opt, r_rate)
+    theta_loss_grid = p0 - p_time_only
+
+    p_combined = bsm_vectorized_surface(spot, xo_strike, rem_T_grid, new_sigma_grid, xo_opt, r_rate)
+    iv_crush_loss_grid = p_time_only - p_combined
+    total_loss_grid = p0 - p_combined
+
+    # Dominance metric: > 0 means IV crush loss > Theta loss
+    dominance_grid = iv_crush_loss_grid - theta_loss_grid
+    time_pct_axis = time_fracs * 100.0
+
+    # Dual Heatmap + Erosion Slices Chart
+    fig_xo, (xax1, xax2) = plt.subplots(1, 2, figsize=(15.5, 5.6))
+    plt.style.use("dark_background")
+    fig_xo.patch.set_facecolor("#0e1117")
+    xax1.set_facecolor("#0e1117")
+    xax2.set_facecolor("#0e1117")
+
+    X_xo, Y_xo = np.meshgrid(time_pct_axis, iv_drops_pct)
+    max_abs = max(np.max(np.abs(dominance_grid)), 1e-4)
+
+    cf = xax1.contourf(X_xo, Y_xo, dominance_grid, levels=30, cmap="RdBu_r", vmin=-max_abs, vmax=max_abs, alpha=0.88)
+    cbar = fig_xo.colorbar(cf, ax=xax1, pad=0.02)
+    cbar.set_label("IV Bleed Loss − Theta Loss (₹)", color="lightgray")
+
+    cs = xax1.contour(X_xo, Y_xo, dominance_grid, levels=[0.0], colors=["#FFEA00"], linewidths=2.8, linestyles="-")
+    xax1.clabel(cs, fmt="  CROSSOVER (IV Bleed = Theta)  ", fontsize=9.0, colors="#FFEA00")
+
+    xax1.text(20, iv_drops_pct[-1] * 0.78, "IV-CRUSH DOMINATED\n(Quiet-Day Vol Bleed > Theta)",
+              color="white", fontweight="bold", fontsize=9.0, bbox=dict(boxstyle="round,pad=0.3", facecolor="#b71c1c", alpha=0.75))
+    xax1.text(46, iv_drops_pct[-1] * 0.14, "THETA DOMINATED\n(√t Time Decay > IV Bleed)",
+              color="white", fontweight="bold", fontsize=9.0, bbox=dict(boxstyle="round,pad=0.3", facecolor="#0d47a1", alpha=0.75))
+
+    xax1.set_title(f"Theta vs. IV-Crush Dominance Surface ({xo_strike:.0f} {xo_opt})", fontweight="bold", color="white")
+    xax1.set_xlabel("Session Time Elapsed (%)", color="lightgray")
+    xax1.set_ylabel("Intraday IV Drop / Crush (% pts)", color="lightgray")
+    xax1.grid(True, linestyle="--", alpha=0.2)
+
+    slice_indices = [0, len(iv_drops_pct) // 3, (2 * len(iv_drops_pct)) // 3, -1]
+    slice_colors = ["#40C4FF", "#00E676", "#FFAB40", "#FF5252"]
+
+    for idx, col in zip(slice_indices, slice_colors):
+        iv_drop_val = iv_drops_pct[idx]
+        rem_prem = p0 - total_loss_grid[idx, :]
+        label_txt = "0.0% IV Drop (Pure Theta)" if idx == 0 else f"-{iv_drop_val:.1f}% Intraday IV Crush"
+        xax2.plot(time_pct_axis, rem_prem, linewidth=2.3, color=col, label=label_txt)
+
+    xax2.set_title("Intraday Option Premium Decay Under IV-Crush Shocks", fontweight="bold", color="white")
+    xax2.set_xlabel("Session Time Elapsed (%)", color="lightgray")
+    xax2.set_ylabel("Remaining Option Premium (₹)", color="lightgray")
+    xax2.grid(True, linestyle="--", alpha=0.2)
+    xax2.legend(framealpha=0.3)
+
+    plt.tight_layout()
+    st.pyplot(fig_xo)
+
+    # Milestone Summary Table
+    milestones = [0.10, 0.25, 0.50, 0.75, 0.90]
+    summary_rows = []
+    for frac in milestones:
+        idx = np.argmin(np.abs(time_fracs - frac))
+        cross_idx = np.argmin(np.abs(dominance_grid[:, idx]))
+        cross_iv_drop = iv_drops_pct[cross_idx]
+        th_loss = theta_loss_grid[cross_idx, idx]
+        tot_loss = total_loss_grid[cross_idx, idx]
+
+        summary_rows.append({
+            "Session Elapsed": f"{int(frac*100)}%",
+            "Pure Theta Loss (₹)": round(th_loss, 2),
+            "Crossover IV Crush (pts)": f"-{cross_iv_drop:.2f}%",
+            "Combined Bleed at Crossover (₹)": round(tot_loss, 2),
+            "Remaining Option Value (₹)": round(p0 - tot_loss, 2)
+        })
+
+    st.markdown("#### Session Milestone Crossover Schedule")
+    st.dataframe(pd.DataFrame(summary_rows), use_container_width=True, hide_index=True)
+
+if auto_refresh:
+    import time
+    time.sleep(30)
+    st.rerun()
