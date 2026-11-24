@@ -77,6 +77,18 @@ def bsm_full_metrics(S, K, T, sigma, option_type="CE", r=RISK_FREE_RATE):
     daily_theta = abs(annual_theta) / 365.0
     return price, delta, gamma, vega, daily_theta
 
+def bsm_vectorized_surface(S, K, T_grid, sigma_grid, option_type="CE", r=RISK_FREE_RATE):
+    """Vectorized BSM valuation for 2D Theta vs. IV-Crush surface grids."""
+    T_safe = np.maximum(T_grid, 1e-7)
+    vol_safe = np.maximum(sigma_grid, 1e-4)
+
+    d1 = (np.log(S / K) + (r + 0.5 * vol_safe**2) * T_safe) / (vol_safe * np.sqrt(T_safe))
+    d2 = d1 - vol_safe * np.sqrt(T_safe)
+
+    if option_type.upper() == "CE":
+        return S * norm.cdf(d1) - K * np.exp(-r * T_safe) * norm.cdf(d2)
+    return K * np.exp(-r * T_safe) * norm.cdf(-d2) - S * norm.cdf(-d1)
+
 # ----------------------------------------------------------------------
 # LIVE SPOT & CHAIN LOADER
 # ----------------------------------------------------------------------
@@ -202,9 +214,16 @@ c5.metric("Call / Put Walls", f"{call_wall:.0f} / {put_wall:.0f}", f"Flip: {gamm
 st.divider()
 
 # ----------------------------------------------------------------------
-# TABS: 1. DEALER GEX PROFILE | 2. THETA EROSION & EXPIRY SIMULATOR
+# TABS: 1. DEALER GEX | 2. THETA EROSION | 3. THETA VS IV-CRUSH CROSSOVER
 # ----------------------------------------------------------------------
-tab1, tab2 = st.tabs(["Dealer Gamma Exposure (GEX)", "Theta Erosion & Expiry Simulator"])
+tab1, tab2, tab3 = st.tabs([
+    "Dealer Gamma Exposure (GEX)",
+    "Theta Erosion & Expiry Simulator",
+    "Theta vs. IV-Crush Crossover"
+])
+
+strike_list = sorted(chain["STRIKE"].unique().tolist())
+default_strike_idx = strike_list.index(atm_strike) if atm_strike in strike_list else len(strike_list) // 2
 
 # ======================================================================
 # TAB 1: DEALER GEX PROFILE
@@ -259,18 +278,13 @@ with tab2:
     st.subheader("Intraday Premium Erosion & Expiry Payoff Simulator")
     st.caption("Auto-populated from your live NIFTY option chain. Select any strike or override parameters below to stress-test Theta decay.")
 
-    # Interactive Controls Row
     col_p1, col_p2, col_p3, col_p4, col_p5 = st.columns(5)
 
-    strike_list = sorted(chain["STRIKE"].unique().tolist())
-    default_strike_idx = strike_list.index(atm_strike) if atm_strike in strike_list else len(strike_list) // 2
-
     with col_p1:
-        selected_strike = st.selectbox("Select Strike (K)", strike_list, index=default_strike_idx)
+        selected_strike = st.selectbox("Select Strike (K)", strike_list, index=default_strike_idx, key="t2_strike")
     with col_p2:
-        opt_type = st.selectbox("Option Type", ["CE", "PE"], index=0)
+        opt_type = st.selectbox("Option Type", ["CE", "PE"], index=0, key="t2_opt")
 
-    # Pull live chain defaults for the selected strike
     row_sel = chain[chain["STRIKE"] == selected_strike].iloc[0]
     default_prem = float(row_sel["CALL_LTP"] if opt_type == "CE" else row_sel["PUT_LTP"])
     default_iv = float(row_sel["CALL_IV"] if opt_type == "CE" else row_sel["PUT_IV"])
@@ -286,7 +300,6 @@ with tab2:
     with col_p5:
         sim_dte = st.number_input("Days to Expiry (DTE)", value=max(float(days_to_expiry), 1.0), step=0.5, min_value=0.1)
 
-    # Run Simulation Calculations
     sim_T = sim_dte / 365.0
     sim_vol = sim_iv / 100.0
     bs_fair, sim_delta, sim_gamma, sim_vega, true_daily_theta = bsm_full_metrics(spot, selected_strike, sim_T, sim_vol, opt_type, r_rate)
@@ -296,7 +309,6 @@ with tab2:
     move_to_beat_theta = true_daily_theta / max(abs(sim_delta), 1e-4)
     breakeven_spot = (selected_strike + sim_premium) if opt_type == "CE" else (selected_strike - sim_premium)
 
-    # Erosion KPI Cards
     ek1, ek2, ek3, ek4, ek5 = st.columns(5)
     ek1.metric("Extrinsic (Time) Value", f"₹{extrinsic_now:.2f}", f"Intrinsic: ₹{intrinsic_now:.2f}")
     ek2.metric("True Daily Theta", f"-₹{true_daily_theta:.2f} / day", f"BSM Fair: ₹{bs_fair:.2f}")
@@ -304,7 +316,6 @@ with tab2:
     ek4.metric("Move to Beat 1D Theta", f"{move_to_beat_theta:.1f} pts", "Spot move needed")
     ek5.metric("Expiry Breakeven", f"{breakeven_spot:,.2f}", f"{breakeven_spot - spot:+.1f} pts from spot")
 
-    # Build Intraday Time Decay Schedule (0% to 90% elapsed)
     decay_fractions = np.round(np.arange(0.0, 1.0, 0.1), 1)
     decay_rows = []
     for frac in decay_fractions:
@@ -320,7 +331,6 @@ with tab2:
         })
     decay_df = pd.DataFrame(decay_rows)
 
-    # Build Expiry Spot Simulation Grid (-200 to +200 pts in 20-pt steps)
     sim_spots = np.arange(round(spot / 20) * 20 - 200, round(spot / 20) * 20 + 220, 20)
     sim_rows = []
     for s_exp in sim_spots:
@@ -341,7 +351,6 @@ with tab2:
         })
     sim_df = pd.DataFrame(sim_rows)
 
-    # Dual Chart: Time Decay Curve + Expiry PnL Profile
     fig_e, (eax1, eax2) = plt.subplots(1, 2, figsize=(15, 5.2))
     plt.style.use("dark_background")
     fig_e.patch.set_facecolor("#0e1117")
@@ -377,7 +386,6 @@ with tab2:
     plt.tight_layout()
     st.pyplot(fig_e)
 
-    # Display Tables Side-by-Side
     t_col1, t_col2 = st.columns([1, 1.4])
     with t_col1:
         st.markdown("#### Intraday Time Decay Schedule")
@@ -386,7 +394,36 @@ with tab2:
         st.markdown("#### Expiry Spot & Delta/Gamma Simulation Grid")
         st.dataframe(sim_df, use_container_width=True, hide_index=True)
 
-if auto_refresh:
-    import time
-    time.sleep(30)
-    st.rerun()
+# ======================================================================
+# TAB 3: THETA VS. IV-CRUSH CROSSOVER SURFACE
+# ======================================================================
+with tab3:
+    st.subheader("Theta vs. Intraday IV-Crush Crossover Surface")
+    st.caption("Isolates the exact parity contour where quiet-day implied volatility bleed (Vega × ΔIV) overtakes √t time decay.")
+
+    cc1, cc2, cc3, cc4, cc5 = st.columns(5)
+    with cc1:
+        xo_strike = st.selectbox("Strike (K)", strike_list, index=default_strike_idx, key="t3_strike")
+    with cc2:
+        xo_opt = st.selectbox("Option Type", ["CE", "PE"], index=0, key="t3_opt")
+
+    xo_row = chain[chain["STRIKE"] == xo_strike].iloc[0]
+    xo_default_iv = float(xo_row["CALL_IV"] if xo_opt == "CE" else xo_row["PUT_IV"])
+    if xo_default_iv <= 0:
+        xo_default_iv = atm_iv
+
+    with cc3:
+        xo_iv = st.number_input("Initial IV (%)", value=round(xo_default_iv, 2), step=0.25, min_value=2.0, key="t3_iv")
+    with cc4:
+        xo_dte = st.number_input("Days to Expiry (DTE)", value=max(float(days_to_expiry), 1.0), step=0.25, min_value=0.1, key="t3_dte")
+    with cc5:
+        max_crush = st.slider("Max Intraday IV Crush (% pts)", 2.0, 12.0, 6.0, step=0.5, key="t3_crush")
+
+    xo_T0 = max(xo_dte / 365.0, 1e-6)
+    xo_sigma0 = xo_iv / 100.0
+    p0, _, _, vega0, theta0 = bsm_full_metrics(spot, xo_strike, xo_T0, xo_sigma0, xo_opt, r_rate)
+    instant_iv_hurdle = theta0 / max(vega0, 1e-6)
+
+    # KPI Row
+    xk1, xk2, xk3, xk4 = st.columns(4)
+    xk1.
